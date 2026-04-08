@@ -48,14 +48,31 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
 - **Firewall (UFW):** active, default deny incoming / allow outgoing
   - Allow `22/tcp` (SSH) from `192.168.1.0/24`
   - Allow `11434/tcp` (Ollama) from `192.168.1.0/24`
+- **Disk (LVM):** root LV extended to use full SSD
+  - `ubuntu-vg/ubuntu-lv` grown from 100 GB → 444 GB (`lvextend -l +100%FREE` + `resize2fs`)
+  - `/` now 437 GB usable
+- **GitHub repo published:** [willemV576/gpu-llm-server](https://github.com/willemV576/gpu-llm-server)
+  - `gh` CLI installed and authenticated as `willemV576` (SSH key uploaded as `gpu-llm`)
+- **Performance tuning:**
+  - NVIDIA persistence daemon (`nvidia-persistenced`) running (auto-enabled by driver)
+  - CPU governor set to `performance` via `cpufrequtils` (`/etc/default/cpufrequtils`, persistent)
 
 ### TODO
 
 #### 1. Ollama
 - Install Ollama
 - Configure to listen on LAN (`OLLAMA_HOST=0.0.0.0:11434`)
-- Pull initial models (TBD — depends on 16GB VRAM budget)
+- Pull initial models — sweet spot for 16GB VRAM is **13–14B class at Q4** (e.g. Qwen 2.5 14B, DeepSeek Coder V2 16B, Llama 3.1 8B Q8 for fast)
 - Set up as systemd service
+- Recommended env vars when installing:
+  - `OLLAMA_FLASH_ATTENTION=1` — faster, less VRAM
+  - `OLLAMA_KV_CACHE_TYPE=q8_0` — quantize KV cache, fits more context
+  - `OLLAMA_KEEP_ALIVE=30m` — keep model loaded between requests
+  - `OLLAMA_NUM_PARALLEL=2` — concurrent requests
+  - `OLLAMA_MAX_LOADED_MODELS=2`
+
+#### BIOS check (next reboot)
+- Verify **Resizable BAR / Above 4G Decoding** is enabled in B550M BIOS — meaningful perf gain for the Blackwell 5060 Ti
 
 #### 2. Monitoring
 - nvtop / nvidia-smi for GPU
