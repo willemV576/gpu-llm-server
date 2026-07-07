@@ -1,0 +1,40 @@
+services:
+  whisper:
+    container_name: wyoming-whisper
+    image: lscr.io/linuxserver/faster-whisper:gpu
+    restart: unless-stopped
+    environment:
+      - WHISPER_MODEL=small-int8
+      - WHISPER_LANG=en
+      - WHISPER_BEAM=1
+    volumes:
+      - ./whisper-data:/config
+    ports:
+      - "10300:10300"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  piper:
+    container_name: wyoming-piper
+    image: rhasspy/wyoming-piper:latest
+    restart: unless-stopped
+    command: --voice en_US-lessac-medium
+    volumes:
+      - ./piper-data:/data
+    ports:
+      - "10200:10200"
+
+  openwakeword:
+    container_name: wyoming-openwakeword
+    image: rhasspy/wyoming-openwakeword:latest
+    restart: unless-stopped
+    command: --preload-model ok_nabu
+    volumes:
+      - ./openwakeword-data:/custom
+    ports:
+      - "10400:10400"

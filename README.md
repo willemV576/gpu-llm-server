@@ -2,6 +2,8 @@
 
 Local LLM box running Ollama, serving models to other machines on the LAN.
 
+> **Recovery note (2026-07-07):** gpu-llm has **no automated backup**. The reproducible config artifacts that otherwise live only on the box are mirrored under [`config/`](config/) in this repo — the Ollama systemd drop-in ([`config/ollama/override.conf`](config/ollama/override.conf)) and the voice-pipeline compose ([`config/voice-pipeline/docker-compose.yml`](config/voice-pipeline/docker-compose.yml)). Firewall rules are documented in the hsc-project `network.md §8`. The netplan WiFi PSK is deliberately **not** committed — it belongs in Bitwarden. Until a real backup exists, this repo is the primary rebuild source. Still on-box-only and needing sudo to capture: `/etc/iptables/rules.v4`, `/etc/netplan/*.yaml`.
+
 ## Hardware (assembled 2026-04-08)
 
 | Component | Model |
@@ -21,7 +23,7 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
 
 - **OS:** Ubuntu Server 24.04 LTS
 - **Disk:** entire 480GB SSD, default LVM layout
-- **Network:** DHCP on enp42s0 (got 192.168.1.200 on first boot)
+- **Network:** DHCP on enp42s0 (got 192.168.1.200 on first boot). **Primary/active address is Ethernet `192.168.1.200`** — this is the IP the Beelink HA integrations (Ollama `:11434`, Wyoming `:10200/10300/10400`) and the firewall rules point at; WiFi `192.168.1.102` (below) is secondary. ⚠️ Neither is a DHCP *reservation* (see hsc-project `network.md §3`) — a rebuilt box may not get `.200` back; reserve it on the AX53/FastMile first or the HA integrations break.
 - **No GUI at install time** — added manually post-install
 
 ## Post-Install Status (2026-04-08)
@@ -59,6 +61,7 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
     - **Gotcha**: Ubuntu ships the daemon with the `--no-persistence-mode` flag, which is the *modern* mechanism — the daemon holds a device reference to keep the driver resident. `nvidia-smi --query-gpu=persistence_mode` will still report `Disabled` because that reads the legacy flag, which is intentionally unused. Practical effect is identical to the legacy `nvidia-smi -pm 1` approach.
   - CPU governor set to `performance` via `cpufrequtils` (`/etc/default/cpufrequtils`, persistent)
 - **Ollama installed and operational (2026-04-11):**
+  - Installed via the official script (`curl -fsSL https://ollama.com/install.sh | sh`) — binary at `/usr/local/bin/ollama`, systemd unit auto-generated
   - Ollama v0.20.4 running as systemd service, auto-start enabled
   - `OLLAMA_NUM_THREADS=6` set via `/etc/systemd/system/ollama.service.d/override.conf` (physical cores only, no oversubscribe)
   - GPU detected: `NVIDIA GeForce RTX 5060 Ti`, CUDA 13.0, 15.9 GiB VRAM, `default_num_ctx=4096`
@@ -66,17 +69,22 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
     - `llama3.2:3b-instruct-q8_0` (3.4 GB) — always-on voice/HA intent model
     - `qwen2.5:14b-instruct-q6_K` (12 GB) — general-purpose / research / Linux / HA design specialist
     - `qwen2.5-coder:14b-instruct-q6_K` (12 GB) — coding specialist
+    - `deepseek-r1:14b` — reasoning / R1-distill specialist (pulled after the original three; present on box as of 2026-07-07)
   - **Verified performance on `qwen2.5:14b-instruct-q6_K` (2026-04-11)**:
     - Generation rate: **33.86 tok/s** (in expected band for 14B q6 on RTX 5060 Ti — between 4060 Ti and 4070)
     - Prompt eval rate: **897.78 tok/s**
     - Cold load from NVMe: **3.94 s** for the 12 GB model
     - Warm reinvocation: ~3.4 s wall-clock for short responses (real first-token latency ~1 s + CLI overhead)
 - **LAN exposure + runtime env vars applied (2026-04-18):** Ollama listens on `0.0.0.0:11434`, reachable from Beelink HA at `http://192.168.1.200:11434`. Full env set in `/etc/systemd/system/ollama.service.d/override.conf`: `OLLAMA_NUM_THREADS=6`, `OLLAMA_HOST=0.0.0.0:11434`, `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_KEEP_ALIVE=30m`, `OLLAMA_NUM_PARALLEL=2`, `OLLAMA_MAX_LOADED_MODELS=2`. Note: hostname `gpu-llm` does not resolve from Beelink — use the IP.
-- **Full voice pipeline operational (verified 2026-05-27):** all three Wyoming services run as Docker containers and auto-start on boot — previously listed as "planned" under Migration/Integration, now live:
-  - `wyoming-whisper` (STT) — `lscr.io/linuxserver/faster-whisper:gpu`, port **10300**, on CUDA, model `small-int8`, beam-size 1. ~480 MiB VRAM idle.
-  - `wyoming-piper` (TTS) — `rhasspy/wyoming-piper`, port **10200**.
-  - `wyoming-openwakeword` (wake word) — `rhasspy/wyoming-openwakeword`, port **10400**.
-  - ⚠️ **Security:** all three bind `0.0.0.0` (all interfaces) and are **not** in the UFW allow-list (only 22 + 11434 are). Ollama on `:11434` has no auth. Decide tailnet exposure deliberately when Tailscale is added — unscoped UFW rules would blanket-expose all of these.
+- **Docker + NVIDIA Container Toolkit (recorded 2026-07-07):** prerequisite for the Wyoming GPU containers.
+  - Docker CE from the official apt repo — keyring `/etc/apt/keyrings/docker.asc`, source `https://download.docker.com/linux/ubuntu noble stable`; packages `docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras` (29.5.3 as of 2026-07-07).
+  - NVIDIA Container Toolkit from `https://nvidia.github.io/libnvidia-container/stable/deb` — keyring `/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg`; packages `nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1` (1.19.1).
+  - Wired into Docker via `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` — confirmed by the `"nvidia"` runtime (`nvidia-container-runtime`) entry in `/etc/docker/daemon.json`. This is what makes the compose `deploy.resources.reservations.devices` GPU block resolve.
+- **Full voice pipeline operational (verified 2026-05-27):** all three Wyoming services run as Docker containers and auto-start on boot — previously listed as "planned" under Migration/Integration, now live. **Full working compose (GPU passthrough, volumes, all env) is committed at [`config/voice-pipeline/docker-compose.yml`](config/voice-pipeline/docker-compose.yml)** — the live file exists only at `/opt/voice-pipeline/` on the box, so the repo copy is the recovery source:
+  - `wyoming-whisper` (STT) — `lscr.io/linuxserver/faster-whisper:gpu`, port **10300**, on CUDA, model `small-int8`, `WHISPER_LANG=en`, beam-size 1. ~480 MiB VRAM idle.
+  - `wyoming-piper` (TTS) — `rhasspy/wyoming-piper`, port **10200**, voice `en_US-lessac-medium`.
+  - `wyoming-openwakeword` (wake word) — `rhasspy/wyoming-openwakeword`, port **10400**, preloaded model `ok_nabu`.
+  - **Security (updated 2026-07-07 — supersedes the old "not firewalled" warning):** the containers still bind `0.0.0.0`, but inbound access to `10200/10300/10400` is locked down at the kernel by a persisted `DOCKER-USER` rule that DROPs those ports on `enp42s0` for everything except the Beelink `192.168.1.194` (see hsc-project `network.md §8`; persisted via `iptables-persistent` in `/etc/iptables/rules.v4`). Ollama `:11434` is likewise UFW-restricted to `192.168.1.194`. Neither Ollama nor the Wyoming services have app-level auth, so the firewall scoping is what protects them — keep any future `tailscale0` rules per-port, never a blanket allow.
 
 ### TODO
 
