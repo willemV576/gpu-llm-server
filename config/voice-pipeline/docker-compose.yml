@@ -4,7 +4,7 @@ services:
     image: lscr.io/linuxserver/faster-whisper:gpu
     restart: unless-stopped
     environment:
-      - WHISPER_MODEL=small-int8
+      - WHISPER_MODEL=turbo
       - WHISPER_LANG=en
       - WHISPER_BEAM=1
     volumes:

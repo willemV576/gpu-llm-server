@@ -62,11 +62,12 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
   - CPU governor set to `performance` via `cpufrequtils` (`/etc/default/cpufrequtils`, persistent)
 - **Ollama installed and operational (2026-04-11):**
   - Installed via the official script (`curl -fsSL https://ollama.com/install.sh | sh`) — binary at `/usr/local/bin/ollama`, systemd unit auto-generated
-  - Ollama v0.20.4 running as systemd service, auto-start enabled
+  - Ollama running as systemd service, auto-start enabled. Originally v0.20.4; **upgraded to v0.40.13 on 2026-11-01** by re-running the install script (the `override.conf` drop-in survives). v0.40 converts each model to its llama.cpp format on first run (slow first load) and keeps the original as a backup — see the v0.40.2 release notes for the cleanup command.
   - `OLLAMA_NUM_THREADS=6` set via `/etc/systemd/system/ollama.service.d/override.conf` (physical cores only, no oversubscribe)
   - GPU detected: `NVIDIA GeForce RTX 5060 Ti`, CUDA 13.0, 15.9 GiB VRAM, `default_num_ctx=4096`
   - Three models pulled and smoke-tested — all responding correctly on GPU:
-    - `llama3.2:3b-instruct-q8_0` (3.4 GB) — always-on voice/HA intent model
+    - `llama3.2:3b-instruct-q8_0` (3.4 GB) — original voice/HA intent model; **replaced by `qwen3:8b` on 2026-11-01**, kept as fallback
+    - `qwen3:8b` (5.2 GB, ~5.9 GB VRAM loaded) — **current voice/HA model** (added 2026-11-01). Mini HA tool-calling test: 12/12 correct at ~0.5 s vs 10/12 for llama3.2. HA Ollama integration: Think OFF, Keep alive `-1` (always loaded), Control Home Assistant = Assist, max history 5.
     - `qwen2.5:14b-instruct-q6_K` (12 GB) — general-purpose / research / Linux / HA design specialist
     - `qwen2.5-coder:14b-instruct-q6_K` (12 GB) — coding specialist
     - `deepseek-r1:14b` — reasoning / R1-distill specialist (pulled after the original three; present on box as of 2026-07-07)
@@ -81,7 +82,7 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
   - NVIDIA Container Toolkit from `https://nvidia.github.io/libnvidia-container/stable/deb` — keyring `/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg`; packages `nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1` (1.19.1).
   - Wired into Docker via `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` — confirmed by the `"nvidia"` runtime (`nvidia-container-runtime`) entry in `/etc/docker/daemon.json`. This is what makes the compose `deploy.resources.reservations.devices` GPU block resolve.
 - **Full voice pipeline operational (verified 2026-05-27):** all three Wyoming services run as Docker containers and auto-start on boot — previously listed as "planned" under Migration/Integration, now live. **Full working compose (GPU passthrough, volumes, all env) is committed at [`config/voice-pipeline/docker-compose.yml`](config/voice-pipeline/docker-compose.yml)** — the live file exists only at `/opt/voice-pipeline/` on the box, so the repo copy is the recovery source:
-  - `wyoming-whisper` (STT) — `lscr.io/linuxserver/faster-whisper:gpu`, port **10300**, on CUDA, model `small-int8`, `WHISPER_LANG=en`, beam-size 1. ~480 MiB VRAM idle.
+  - `wyoming-whisper` (STT) — `lscr.io/linuxserver/faster-whisper:gpu`, port **10300**, on CUDA, model **`turbo`** (large-v3-turbo, downloaded from Hugging Face into `whisper-data/` on first start; ~2.2 GB VRAM), `WHISPER_LANG=en`, beam-size 1. Switched from `small-int8` (~480 MiB) on 2026-11-01 after it misheard "dim it" as "damn it".
   - `wyoming-piper` (TTS) — `rhasspy/wyoming-piper`, port **10200**, voice `en_US-lessac-medium`.
   - `wyoming-openwakeword` (wake word) — `rhasspy/wyoming-openwakeword`, port **10400**, preloaded model `ok_nabu`.
   - **Security (updated 2026-07-07 — supersedes the old "not firewalled" warning):** the containers still bind `0.0.0.0`, but inbound access to `10200/10300/10400` is locked down at the kernel by a persisted `DOCKER-USER` rule that DROPs those ports on `enp42s0` for everything except the Beelink `192.168.1.194` (see hsc-project `network.md §8`; persisted via `iptables-persistent` in `/etc/iptables/rules.v4`). Ollama `:11434` is likewise UFW-restricted to `192.168.1.194`. Neither Ollama nor the Wyoming services have app-level auth, so the firewall scoping is what protects them — keep any future `tailscale0` rules per-port, never a blanket allow.
@@ -90,7 +91,7 @@ Local LLM box running Ollama, serving models to other machines on the LAN.
 
 #### 1. Ollama
 - ~~Install Ollama~~ (done 2026-04-11)
-- ~~Set up as systemd service~~ (done — v0.20.4 with `OLLAMA_NUM_THREADS=6` override)
+- ~~Set up as systemd service~~ (done — v0.20.4 with `OLLAMA_NUM_THREADS=6` override; now v0.40.13)
 - ~~Pull initial models~~ (done — three-model specialist-swap lineup, see "Ollama installed" block above)
 - ~~Configure to listen on LAN~~ (done 2026-04-18 — `OLLAMA_HOST=0.0.0.0:11434`, see "LAN exposure" block above)
 - ~~Set recommended runtime env vars~~ (done 2026-04-18 — all 7 vars in `override.conf`, see "LAN exposure" block above)
